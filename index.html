@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<title>V8 Engine · 機械引擎</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{width:100%;height:100%;overflow:hidden;background:#0e1218;font-family:system-ui,-apple-system,sans-serif}
+#c{display:block;width:100%;height:100%;touch-action:none}
+#ui{position:absolute;left:0;right:0;bottom:0;padding:12px 12px 24px;background:linear-gradient(transparent,rgba(0,0,0,.85));color:#e8eef8;pointer-events:none;z-index:10}
+#ui .row{display:flex;gap:7px;flex-wrap:wrap;pointer-events:auto;margin-bottom:7px}
+button{background:#ff9a1a;color:#111;border:none;border-radius:999px;padding:9px 14px;font-weight:600;font-size:13px}
+button.secondary{background:rgba(255,255,255,.13);color:#e8eef8}
+#title{font-size:14px;font-weight:700;margin-bottom:3px}
+#info{font-size:11px;opacity:.8}
+#rpm{position:absolute;top:12px;left:12px;color:#ffb040;font-size:13px;font-weight:600;z-index:10}
+#err{position:absolute;top:40px;left:12px;right:12px;color:#ff8a8a;font-size:12px;z-index:20;display:none}
+</style>
+</head>
+<body>
+<div id="err"></div>
+<div id="rpm">700 rpm</div>
+<canvas id="c"></canvas>
+<div id="ui">
+  <div id="title">Cross-plane V8 · 機械引擎</div>
+  <div class="row">
+    <button id="btnRun">運轉中</button>
+    <button id="btnCut" class="secondary">切開缸體</button>
+    <button id="btnSlow" class="secondary">慢動作</button>
+    <button id="btnReset" class="secondary">重置視角</button>
+  </div>
+  <div id="info">拖曳旋轉 · 雙指/滾輪縮放 · 可看活塞與曲軸運動</div>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
+<script>
+(function(){
+  var errEl=document.getElementById('err');
+  function showErr(m){errEl.style.display='block';errEl.textContent=m;console.error(m);}
+  try{
+    if(typeof THREE==='undefined'){showErr('Three.js 載入失敗');return;}
+
+    var canvas=document.getElementById('c');
+    var renderer=new THREE.WebGLRenderer({canvas:canvas,antialias:true});
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio||1,2));
+    renderer.setSize(innerWidth,innerHeight);
+    if(renderer.outputColorSpace!==undefined) renderer.outputColorSpace=THREE.SRGBColorSpace;
+    renderer.toneMapping=THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure=1.15;
+
+    var scene=new THREE.Scene();
+    scene.background=new THREE.Color(0x0e1218);
+
+    var camera=new THREE.PerspectiveCamera(36,innerWidth/innerHeight,1,800);
+    var target=new THREE.Vector3(0,20,0);
+    var spherical={radius:280, theta:0.85, phi:1.15};
+    function updateCam(){
+      camera.position.set(
+        target.x+spherical.radius*Math.sin(spherical.phi)*Math.sin(spherical.theta),
+        target.y+spherical.radius*Math.cos(spherical.phi),
+        target.z+spherical.radius*Math.sin(spherical.phi)*Math.cos(spherical.theta)
+      );
+      camera.lookAt(target);
+    }
+    updateCam();
+
+    var dragging=false,lastX=0,lastY=0,pointers={};
+    canvas.addEventListener('pointerdown',function(e){
+      pointers[e.pointerId]=[e.clientX,e.clientY];
+      if(Object.keys(pointers).length===1){dragging=true;lastX=e.clientX;lastY=e.clientY;}
+      canvas.setPointerCapture(e.pointerId);
+    });
+    canvas.addEventListener('pointermove',function(e){
+      if(!pointers[e.pointerId])return;
+      var ids=Object.keys(pointers);
+      if(ids.length===1&&dragging){
+        var dx=e.clientX-lastX,dy=e.clientY-lastY;
+        lastX=e.clientX;lastY=e.clientY;
+        spherical.theta-=dx*0.005;
+        spherical.phi=Math.max(0.2,Math.min(Math.PI-0.2,spherical.phi+dy*0.005));
+        updateCam();
+      }else if(ids.length===2){
+        var p0=pointers[ids[0]],p1=pointers[ids[1]];
+        var prev=Math.hypot(p0[0]-p1[0],p0[1]-p1[1]);
+        pointers[e.pointerId]=[e.clientX,e.clientY];
+        p0=pointers[ids[0]];p1=pointers[ids[1]];
+        var dist=Math.hypot(p0[0]-p1[0],p0[1]-p1[1]);
+        if(prev>0){spherical.radius=Math.max(120,Math.min(480,spherical.radius*(prev/dist)));updateCam();}
+      }
+    });
+    function up(e){delete pointers[e.pointerId];if(!Object.keys(pointers).length)dragging=false;}
+    canvas.addEventListener('pointerup',up);canvas.addEventListener('pointercancel',up);
+    canvas.addEventListener('wheel',function(e){
+      e.preventDefault();
+      spherical.radius=Math.max(120,Math.min(480,spherical.radius*(e.deltaY>0?1.08:0.92)));
+      updateCam();
+    },{passive:false});
+
+    scene.add(new THREE.AmbientLight(0x3a4558,0.55));
+    scene.add(new THREE.HemisphereLight(0xd0e0ff,0x1a2030,0.45));
+    var key=new THREE.DirectionalLight(0xfff5e8,2.4);key.position.set(80,120,60);scene.add(key);
+    var fill=new THREE.DirectionalLight(0x88aaff,0.85);fill.position.set(-70,40,-50);scene.add(fill);
+    var rim=new THREE.DirectionalLight(0xffa040,0.9);rim.position.set(20,40,-100);scene.add(rim);
+
+    var blockMat=new THREE.MeshStandardMaterial({color:0x1a1f28,roughness:0.4,metalness:0.35});
+    var glassMat=new THREE.MeshStandardMaterial({color:0xa8d0f0,roughness:0.15,metalness:0.1,transparent:true,opacity:0.22,side:THREE.DoubleSide});
+    var pistonMat=new THREE.MeshStandardMaterial({color:0xe8ecf4,roughness:0.3,metalness:0.4});
+    var rodMat=new THREE.MeshStandardMaterial({color:0x2a303c,roughness:0.35,metalness:0.5});
+    var crankMat=new THREE.MeshStandardMaterial({color:0xc8d0dc,roughness:0.25,metalness:0.75});
+    var accentMat=new THREE.MeshStandardMaterial({color:0xff9a1a,roughness:0.3,metalness:0.4,emissive:0xff9a1a,emissiveIntensity:0.2});
+    var headMat=new THREE.MeshStandardMaterial({color:0x222830,roughness:0.4,metalness:0.3});
+
+    var R=22, L=70;
+    var bankAngle=Math.PI/4;
+    var pinZ=[-54,-18,18,54];
+    var pinPhase=[0, Math.PI/2, 3*Math.PI/2, Math.PI];
+
+    var root=new THREE.Group();scene.add(root);
+
+    for(var i=0;i<5;i++){
+      var wall=new THREE.Mesh(new THREE.BoxGeometry(90,70,6),blockMat);
+      wall.position.set(0,5, -72+i*36);
+      root.add(wall);
+    }
+    var floor=new THREE.Mesh(new THREE.BoxGeometry(90,6,150),blockMat);
+    floor.position.y=-32;root.add(floor);
+
+    var cyls=[];
+    function addCylinder(bank, throwIdx){
+      var g=new THREE.Group();
+      var ang=bank<0?-bankAngle:bankAngle;
+      g.rotation.z=ang;
+      g.position.z=pinZ[throwIdx];
+
+      var liner=new THREE.Mesh(new THREE.CylinderGeometry(16,16,55,20,1,true),glassMat);
+      liner.position.y=28;g.add(liner);
+
+      var head=new THREE.Mesh(new THREE.CylinderGeometry(17,17,10,16),headMat);
+      head.position.y=58;g.add(head);
+
+      var piston=new THREE.Mesh(new THREE.CylinderGeometry(14.5,14.5,12,16),pistonMat);
+      g.add(piston);
+
+      var rod=new THREE.Mesh(new THREE.CylinderGeometry(2.2,2.2,L*0.92,8),rodMat);
+      g.add(rod);
+
+      var pin=new THREE.Mesh(new THREE.SphereGeometry(3,10,8),accentMat);
+      g.add(pin);
+
+      root.add(g);
+      cyls.push({g:g,bank:bank,throwIdx:throwIdx,piston:piston,rod:rod,pin:pin,liner:liner,ang:ang});
+    }
+    for(var t=0;t<4;t++){addCylinder(-1,t);addCylinder(1,t);}
+
+    var crankGroup=new THREE.Group();root.add(crankGroup);
+    var main=new THREE.Mesh(new THREE.CylinderGeometry(6,6,160,14),crankMat);
+    main.rotation.x=Math.PI/2;crankGroup.add(main);
+    var throws=[];
+    for(var t=0;t<4;t++){
+      var th=new THREE.Group();
+      th.position.z=pinZ[t];
+      var cw=new THREE.Mesh(new THREE.BoxGeometry(14,28,10),crankMat);
+      cw.position.y=-6;th.add(cw);
+      var journal=new THREE.Mesh(new THREE.CylinderGeometry(5,5,12,12),accentMat);
+      journal.rotation.x=Math.PI/2;th.add(journal);
+      var pinOff=new THREE.Mesh(new THREE.CylinderGeometry(4,4,14,10),crankMat);
+      pinOff.rotation.x=Math.PI/2;
+      pinOff.position.set(R,0,0);
+      th.add(pinOff);
+      crankGroup.add(th);
+      throws.push({g:th, phase:pinPhase[t]});
+    }
+    var fly=new THREE.Mesh(new THREE.CylinderGeometry(36,36,8,32),blockMat);
+    fly.rotation.x=Math.PI/2;fly.position.z=-90;crankGroup.add(fly);
+    var flyRing=new THREE.Mesh(new THREE.TorusGeometry(36,2.5,8,32),accentMat);
+    flyRing.position.z=-90;crankGroup.add(flyRing);
+    var pulley=new THREE.Mesh(new THREE.CylinderGeometry(18,18,10,20),crankMat);
+    pulley.rotation.x=Math.PI/2;pulley.position.z=90;crankGroup.add(pulley);
+
+    var running=true, cutaway=0, targetCut=0, slow=false, time=0;
+    var rpmEl=document.getElementById('rpm');
+
+    function solvePiston(th, phase){
+      var a=th+phase;
+      var cx=R*Math.cos(a);
+      var cy=R*Math.sin(a);
+      var s=cy+Math.sqrt(Math.max(0,L*L-cx*cx));
+      return {cx:cx,cy:cy,s:s,a:a};
+    }
+
+    function update(th){
+      throws.forEach(function(t){ t.g.rotation.z=th+t.phase; });
+
+      cyls.forEach(function(c){
+        var sol=solvePiston(th, pinPhase[c.throwIdx]);
+        var py=sol.s*0.85+8;
+        c.piston.position.y=py;
+        c.pin.position.set(0,py,0);
+        var pinLocalY=sol.cy;
+        var pinLocalX=sol.cx;
+        var midY=(py+pinLocalY)*0.5;
+        var midX=pinLocalX*0.5;
+        c.rod.position.set(midX,midY,0);
+        var dy=py-pinLocalY, dx=-pinLocalX;
+        var len=Math.hypot(dx,dy)||1;
+        c.rod.scale.y=len/(L*0.92);
+        c.rod.rotation.z=Math.atan2(dx,dy);
+      });
+
+      cutaway+=(targetCut-cutaway)*0.08;
+      root.children.forEach(function(ch){
+        if(ch.geometry&&ch.geometry.type==='BoxGeometry'&&ch.material===blockMat){
+          ch.material.transparent=cutaway>0.05;
+          ch.material.opacity=1-cutaway*0.85;
+          ch.material.depthWrite=cutaway<0.5;
+        }
+      });
+      floor.material.transparent=cutaway>0.05;
+      floor.material.opacity=1-cutaway*0.7;
+      glassMat.opacity=0.18+cutaway*0.25;
+    }
+
+    document.getElementById('btnRun').onclick=function(){
+      running=!running;this.textContent=running?'運轉中':'已暫停';this.className=running?'':'secondary';
+    };
+    document.getElementById('btnCut').onclick=function(){
+      targetCut=targetCut>0.5?0:1;
+      this.textContent=targetCut>0.5?'關閉缸體':'切開缸體';
+      this.className=targetCut>0.5?'':'secondary';
+    };
+    document.getElementById('btnSlow').onclick=function(){
+      slow=!slow;this.textContent=slow?'正常速度':'慢動作';this.className=slow?'':'secondary';
+    };
+    document.getElementById('btnReset').onclick=function(){
+      spherical.radius=280;spherical.theta=0.85;spherical.phi=1.15;updateCam();
+    };
+    addEventListener('resize',function(){
+      camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();
+      renderer.setSize(innerWidth,innerHeight);
+    });
+
+    var last=performance.now();
+    function animate(now){
+      requestAnimationFrame(animate);
+      var dt=Math.min(0.05,(now-last)/1000);last=now;
+      if(running) time+=dt*(slow?0.25:1);
+      var rpm=slow?180:700;
+      var radPerSec=(rpm/60)*Math.PI*2 * 0.15;
+      var th=time*radPerSec;
+      update(th);
+      rpmEl.textContent=(slow?180:700)+' rpm'+(slow?' · 慢動作':'');
+      renderer.render(scene,camera);
+    }
+    requestAnimationFrame(animate);
+  }catch(e){showErr(String(e&&e.message?e.message:e));}
+})();
+</script>
+</body>
+</html>
